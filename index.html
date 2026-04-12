@@ -54,7 +54,6 @@
       font-size: 2rem;
       font-weight: 700;
       color: #fff;
-      letter-spacing: 0.02em;
     }
 
     #status-msg {
@@ -74,8 +73,10 @@
 </head>
 <body>
 
-<!-- YouTube IFrame API loads the player into this div -->
-<div id="yt-frame"></div>
+<iframe id="yt-frame"
+  allow="autoplay; fullscreen; encrypted-media"
+  allowfullscreen>
+</iframe>
 
 <div id="status-screen">
   <div class="spinner" id="spinner"></div>
@@ -83,9 +84,6 @@
   <div id="status-msg">Connecting to your channel. Please wait.</div>
   <div id="next-check"></div>
 </div>
-
-<!-- Load YouTube IFrame API -->
-<script src="https://www.youtube.com/iframe_api"></script>
 
 <script>
 var CONFIG = {
@@ -100,102 +98,65 @@ var currentVideoId = null;
 var pollTimer = null;
 var countdownTimer = null;
 var secsToNext = CONFIG.POLL_INTERVAL_SEC;
-var player = null;
-var playerReady = false;
+var unmuteTimer = null;
 
+var frame = document.getElementById('yt-frame');
 var statusScreen = document.getElementById('status-screen');
 var spinner = document.getElementById('spinner');
 var titleEl = document.getElementById('status-title');
 var msgEl = document.getElementById('status-msg');
 var nextCheckEl = document.getElementById('next-check');
 
-// ── YouTube IFrame API callback ──────────────────────────
-function onYouTubeIframeAPIReady() {
-  playerReady = true;
-  // If a videoId was already found before the API loaded, play it now
-  if (currentVideoId) {
-    loadPlayer(currentVideoId);
+function buildEmbedUrl(videoId) {
+  return 'https://www.youtube.com/embed/' + videoId +
+    '?autoplay=1' +
+    '&mute=1' +
+    '&controls=0' +
+    '&loop=1' +
+    '&rel=0' +
+    '&modestbranding=1' +
+    '&playsinline=1' +
+    '&enablejsapi=1' +
+    '&origin=' + encodeURIComponent(window.location.origin);
+}
+
+function unmutePlayer() {
+  // Send postMessage commands to unmute the YouTube iframe
+  try {
+    frame.contentWindow.postMessage(
+      JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+    );
+    frame.contentWindow.postMessage(
+      JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*'
+    );
+  } catch(e) {
+    console.log('postMessage error:', e);
   }
 }
 
-function loadPlayer(videoId) {
-  // If player already exists, just load the new video
-  if (player) {
-    player.loadVideoById(videoId);
-    return;
-  }
+function showStream(videoId) {
+  if (currentVideoId === videoId) return;
+  currentVideoId = videoId;
 
-  // Style the container div to fill the screen
-  var container = document.getElementById('yt-frame');
-  container.style.display = 'block';
-  container.style.position = 'fixed';
-  container.style.top = '0';
-  container.style.left = '0';
-  container.style.width = '100vw';
-  container.style.height = '100vh';
-  container.style.zIndex = '1';
+  // Load iframe muted first (browser allows muted autoplay)
+  frame.src = buildEmbedUrl(videoId);
+  frame.style.display = 'block';
+  statusScreen.classList.add('hidden');
+  clearCountdown();
 
-  player = new YT.Player('yt-frame', {
-    height: '100%',
-    width: '100%',
-    videoId: videoId,
-    playerVars: {
-      autoplay:        1,
-      mute:            1,
-      controls:        0,
-      loop:            1,
-      rel:             0,
-      modestbranding:  1,
-      playsinline:     1,
-      iv_load_policy:  3,
-      disablekb:       1
-    },
-    events: {
-      onReady: function(event) {
-        event.target.playVideo();
-        // Unmute after 1.5 seconds — bypasses autoplay audio restriction
-        setTimeout(function() {
-          event.target.unMute();
-          event.target.setVolume(100);
-        }, 1500);
-        // Hide the status screen
-        statusScreen.classList.add('hidden');
-      },
-      onStateChange: function(event) {
-        // If stream ends, start checking for next stream
-        if (event.data === YT.PlayerState.ENDED) {
-          currentVideoId = null;
-          showStatus('Stream Ended', 'Checking for next stream...', true);
-          setTimeout(pollWorker, 5000);
-        }
-        // If video is paused unexpectedly, resume it
-        if (event.data === YT.PlayerState.PAUSED) {
-          setTimeout(function() {
-            if (player) player.playVideo();
-          }, 2000);
-        }
-      },
-      onError: function(event) {
-        // On error, reset and try again
-        currentVideoId = null;
-        showStatus('Stream Error', 'Reconnecting...', true);
-        setTimeout(pollWorker, 10000);
-      }
-    }
+  // Unmute attempts — try multiple times to make sure it sticks
+  clearTimeout(unmuteTimer);
+  var attempts = [1500, 3000, 5000, 8000];
+  attempts.forEach(function(delay) {
+    setTimeout(unmutePlayer, delay);
   });
 }
 
 function showStatus(title, msg, isLoading) {
   currentVideoId = null;
-  if (player) {
-    player.stopVideo();
-    player.destroy();
-    player = null;
-    // Recreate the target div since destroy() removes it
-    var newDiv = document.createElement('div');
-    newDiv.id = 'yt-frame';
-    document.body.insertBefore(newDiv, document.body.firstChild);
-  }
+  frame.style.display = 'none';
+  frame.src = '';
+  clearTimeout(unmuteTimer);
   titleEl.textContent = title;
   msgEl.textContent = msg;
   spinner.style.display = isLoading ? 'block' : 'none';
@@ -221,20 +182,9 @@ function pollWorker() {
     .then(function(res) { return res.json(); })
     .then(function(data) {
       if (data.live && data.videoId) {
-        if (currentVideoId !== data.videoId) {
-          currentVideoId = data.videoId;
-          if (playerReady) {
-            loadPlayer(data.videoId);
-          }
-        }
-        clearCountdown();
+        showStream(data.videoId);
       } else if (CONFIG.FALLBACK_VIDEO_ID) {
-        if (currentVideoId !== CONFIG.FALLBACK_VIDEO_ID) {
-          currentVideoId = CONFIG.FALLBACK_VIDEO_ID;
-          if (playerReady) {
-            loadPlayer(CONFIG.FALLBACK_VIDEO_ID);
-          }
-        }
+        showStream(CONFIG.FALLBACK_VIDEO_ID);
       } else {
         showStatus(CONFIG.OFFLINE_TITLE, CONFIG.OFFLINE_MSG, false);
         startCountdown();
