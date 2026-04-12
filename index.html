@@ -14,7 +14,6 @@
       font-family: 'Segoe UI', Arial, sans-serif;
     }
 
-    /* ── Fullscreen iframe ───────────────────────── */
     #yt-frame {
       position: fixed;
       top: 0; left: 0;
@@ -24,7 +23,6 @@
       z-index: 1;
     }
 
-    /* ── Offline / Loading screen ────────────────── */
     #status-screen {
       position: fixed;
       top: 0; left: 0;
@@ -39,11 +37,6 @@
     }
 
     #status-screen.hidden { display: none; }
-
-    .yt-logo {
-      width: 80px;
-      filter: grayscale(0.3);
-    }
 
     .spinner {
       width: 48px; height: 48px;
@@ -78,7 +71,6 @@
       margin-top: 8px;
     }
 
-    /* ── Autoplay unlock overlay (invisible) ─────── */
     #unlock-overlay {
       position: fixed;
       inset: 0;
@@ -90,98 +82,57 @@
 </head>
 <body>
 
-<!-- Invisible overlay — catches first click to unlock audio autoplay -->
 <div id="unlock-overlay" title="Click to start"></div>
 
-<!-- YouTube fullscreen iframe -->
 <iframe id="yt-frame"
   allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
   allowfullscreen>
 </iframe>
 
-<!-- Status / Offline screen -->
 <div id="status-screen">
-  <svg class="yt-logo" viewBox="0 0 90 20" xmlns="http://www.w3.org/2000/svg">
-    <path fill="#FF0000" d="M27.97 3.44S27.68 1.5 26.84.64C25.78-.52 24.59-.53 24.05-.47 20.11-.2 14.03-.2 14.03-.2h-.01S7.94-.2 4-.47C3.45-.53 2.27-.52 1.21.64.37 1.5.07 3.44.07 3.44S-.2 5.7-.2 7.96v2.11c0 2.26.27 4.52.27 4.52s.3 1.94 1.14 2.8c1.06 1.16 2.46 1.12 3.08 1.24C6.3 18.78 14.02 18.84 14.02 18.84s6.09-.01 10.03-.28c.54-.07 1.73-.06 2.79-1.22.84-.86 1.13-2.8 1.13-2.8s.27-2.26.27-4.52V7.96c0-2.26-.27-4.52-.27-4.52zm-16.6 9.2V5.44l7.54 3.61-7.54 3.59z"/>
-  </svg>
   <div class="spinner" id="spinner"></div>
-  <div id="status-title">Checking for Live Stream…</div>
+  <div id="status-title">Checking for Live Stream...</div>
   <div id="status-msg">Connecting to your channel. Please wait.</div>
   <div id="next-check"></div>
 </div>
 
 <script>
-// ╔══════════════════════════════════════════════════════╗
-// ║              CONFIGURATION — EDIT HERE              ║
-// ╚══════════════════════════════════════════════════════╝
-const CONFIG = {
-  // Paste your Cloudflare Worker URL here:
-  WORKER_URL: 'https://rapid-breeze-c02d.camtheitguy.workers.dev/
-
-  // How often the page polls the worker (seconds)
-  // Worker itself only calls YouTube API every 15 min
+var CONFIG = {
+  WORKER_URL: 'https://rapid-breeze-c02d.camtheitguy.workers.dev/',
   POLL_INTERVAL_SEC: 30,
-
-  // Message shown when no stream is active
-  OFFLINE_TITLE: '📺 Stream Offline',
-  OFFLINE_MSG:   'No live stream is currently active. This page will automatically reload when the stream begins.',
-
-  // Optional: A fallback YouTube video or playlist ID to show when offline
-  // Leave as empty string '' to show the offline screen instead
-  FALLBACK_VIDEO_ID: '',
+  OFFLINE_TITLE: 'Stream Offline',
+  OFFLINE_MSG: 'No live stream is currently active. This page will automatically reload when the stream begins.',
+  FALLBACK_VIDEO_ID: ''
 };
-// ╚══════════════════════════════════════════════════════╝
 
+var currentVideoId = null;
+var pollTimer = null;
+var countdownTimer = null;
+var secsToNext = CONFIG.POLL_INTERVAL_SEC;
 
-// ── State ────────────────────────────────────────────────
-let currentVideoId  = null;
-let pollTimer       = null;
-let countdownTimer  = null;
-let secsToNext      = CONFIG.POLL_INTERVAL_SEC;
-let audioUnlocked   = false;
+var frame = document.getElementById('yt-frame');
+var statusScreen = document.getElementById('status-screen');
+var spinner = document.getElementById('spinner');
+var titleEl = document.getElementById('status-title');
+var msgEl = document.getElementById('status-msg');
+var nextCheckEl = document.getElementById('next-check');
+var unlockOverlay = document.getElementById('unlock-overlay');
 
-// ── DOM refs ─────────────────────────────────────────────
-const frame         = document.getElementById('yt-frame');
-const statusScreen  = document.getElementById('status-screen');
-const spinner       = document.getElementById('spinner');
-const titleEl       = document.getElementById('status-title');
-const msgEl         = document.getElementById('status-msg');
-const nextCheckEl   = document.getElementById('next-check');
-const unlockOverlay = document.getElementById('unlock-overlay');
-
-// ── Audio unlock via first user gesture ──────────────────
-// Unifi Cast may need a one-time click to allow audio.
-// The overlay is invisible and captures it silently.
-unlockOverlay.addEventListener('click', () => {
-  audioUnlocked = true;
+unlockOverlay.addEventListener('click', function() {
   unlockOverlay.style.display = 'none';
-  // Reload iframe src to trigger autoplay with audio
   if (frame.src) {
-    const src = frame.src;
+    var src = frame.src;
     frame.src = '';
-    setTimeout(() => { frame.src = src; }, 100);
+    setTimeout(function() { frame.src = src; }, 100);
   }
-}, { once: true });
+});
 
-// ── Build embed URL ───────────────────────────────────────
 function buildEmbedUrl(videoId) {
-  const params = new URLSearchParams({
-    autoplay:       '1',
-    mute:           '0',   // audio ON
-    controls:       '0',   // no controls (clean display)
-    loop:           '1',
-    rel:            '0',
-    modestbranding: '1',
-    playsinline:    '1',
-    enablejsapi:    '0',
-  });
-  return `https://www.youtube.com/embed/${videoId}?${params}`;
+  return 'https://www.youtube.com/embed/' + videoId + '?autoplay=1&mute=0&controls=0&loop=1&rel=0&modestbranding=1&playsinline=1';
 }
 
-// ── Show the live stream ──────────────────────────────────
 function showStream(videoId) {
-  if (currentVideoId === videoId) return; // already showing — no flicker
-
+  if (currentVideoId === videoId) return;
   currentVideoId = videoId;
   frame.src = buildEmbedUrl(videoId);
   frame.style.display = 'block';
@@ -189,25 +140,22 @@ function showStream(videoId) {
   clearCountdown();
 }
 
-// ── Show offline / status screen ─────────────────────────
-function showStatus(title, msg, isLoading = false) {
+function showStatus(title, msg, isLoading) {
   currentVideoId = null;
   frame.style.display = 'none';
   frame.src = '';
-
   titleEl.textContent = title;
-  msgEl.textContent   = msg;
+  msgEl.textContent = msg;
   spinner.style.display = isLoading ? 'block' : 'none';
   statusScreen.classList.remove('hidden');
 }
 
-// ── Countdown under offline message ──────────────────────
 function startCountdown() {
   clearCountdown();
   secsToNext = CONFIG.POLL_INTERVAL_SEC;
-  countdownTimer = setInterval(() => {
+  countdownTimer = setInterval(function() {
     secsToNext = Math.max(0, secsToNext - 1);
-    nextCheckEl.textContent = `Checking again in ${secsToNext}s…`;
+    nextCheckEl.textContent = 'Checking again in ' + secsToNext + 's...';
   }, 1000);
 }
 
@@ -216,38 +164,35 @@ function clearCountdown() {
   nextCheckEl.textContent = '';
 }
 
-// ── Main poll function ────────────────────────────────────
-async function pollWorker() {
-  try {
-    const res  = await fetch(CONFIG.WORKER_URL, { cache: 'no-store' });
-    const data = await res.json();
-
-    if (data.live && data.videoId) {
-      showStream(data.videoId);
-    } else if (CONFIG.FALLBACK_VIDEO_ID) {
-      showStream(CONFIG.FALLBACK_VIDEO_ID);
-    } else {
-      showStatus(CONFIG.OFFLINE_TITLE, CONFIG.OFFLINE_MSG, false);
+function pollWorker() {
+  fetch(CONFIG.WORKER_URL)
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (data.live && data.videoId) {
+        showStream(data.videoId);
+      } else if (CONFIG.FALLBACK_VIDEO_ID) {
+        showStream(CONFIG.FALLBACK_VIDEO_ID);
+      } else {
+        showStatus(CONFIG.OFFLINE_TITLE, CONFIG.OFFLINE_MSG, false);
+        startCountdown();
+      }
+    })
+    .catch(function(err) {
+      console.error('Worker fetch error:', err);
+      showStatus(
+        'Connection Error',
+        'Unable to reach stream service. Will retry automatically.',
+        false
+      );
       startCountdown();
-    }
-
-  } catch (err) {
-    console.error('Worker fetch error:', err);
-    showStatus(
-      '⚠️ Connection Error',
-      'Unable to reach stream service. Will retry automatically.',
-      false
-    );
-    startCountdown();
-  }
-
-  // Schedule next poll
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(pollWorker, CONFIG.POLL_INTERVAL_SEC * 1000);
+    })
+    .finally(function() {
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(pollWorker, CONFIG.POLL_INTERVAL_SEC * 1000);
+    });
 }
 
-// ── Kick off on page load ─────────────────────────────────
-showStatus('Checking for Live Stream…', 'Connecting to your channel. Please wait.', true);
+showStatus('Checking for Live Stream...', 'Connecting to your channel. Please wait.', true);
 pollWorker();
 </script>
 
