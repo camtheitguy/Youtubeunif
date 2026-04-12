@@ -121,14 +121,22 @@ function buildEmbedUrl(videoId) {
 }
 
 function unmutePlayer() {
-  // Send postMessage commands to unmute the YouTube iframe
   try {
+    // Step 1 — Unmute
     frame.contentWindow.postMessage(
       JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
     );
+    // Step 2 — Set volume to full
     frame.contentWindow.postMessage(
       JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*'
     );
+    // Step 3 — Force play after a tiny delay (fixes the pause-on-unmute issue)
+    setTimeout(function() {
+      frame.contentWindow.postMessage(
+        JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+      );
+    }, 300);
+
   } catch(e) {
     console.log('postMessage error:', e);
   }
